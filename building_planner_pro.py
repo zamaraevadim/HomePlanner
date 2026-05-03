@@ -286,7 +286,7 @@ class TkinterRenderer(Renderer):
                 outline_color = COLOR_WALL_SELECTED if wall.selected else "black"
                 self.canvas.create_polygon(coords, fill=color, outline=outline_color, width=2 if wall.selected else 1, tags="wall")
             
-            # Размер стены рядом с ней (рисуем для всех стен)
+            # Размер стены рядом с ней (рисуем для всех стен) - увеличенное смещение для лучшей видимости
             mid_x = (wall.start.x + wall.end.x) / 2
             mid_y = (wall.start.y + wall.end.y) / 2
             # Смещение перпендикулярно стене
@@ -295,19 +295,19 @@ class TkinterRenderer(Renderer):
             length = math.hypot(dx, dy)
             if length > 0:
                 nx, ny = -dy/length, dx/length
-                dim_x = mid_x + nx * 20
-                dim_y = mid_y + ny * 20
+                dim_x = mid_x + nx * 25  # Увеличено смещение
+                dim_y = mid_y + ny * 25
                 self.canvas.create_text(dim_x, dim_y, text=f"{wall.length_m:.2f}м", 
-                                       font=("Arial", 9, "bold"), fill=COLOR_DIMENSION, tags="dimension")
+                                       font=("Arial", 10, "bold"), fill=COLOR_DIMENSION, tags="dimension")
             
             # Маркеры выделения (ручки для изменения размера) - только если стена выделена
             if wall.selected:
-                # Ручки на концах стены
+                # Ручки на концах стены - рисуем всегда, но цвет зависит от режима
                 r = 6
                 handle_color = COLOR_HANDLE if self.resize_mode_enabled else "blue"
                 self.canvas.create_oval(wall.start.x-r, wall.start.y-r, wall.start.x+r, wall.start.y+r, 
                                        fill="white", outline=handle_color, width=2, tags="resize_handle_start")
-                self.canvas.create_oval(wall.end.x-r, wall.end.y-r, wall.end.x+r, wall.end.y+r, 
+                self.canvas.create_oval(wall.end.x-r, wall.end.y-r, wall.end.x+r, wall.end.y+r,
                                        fill="white", outline=handle_color, width=2, tags="resize_handle_end")
 
         # Отрисовка проемов (окна/двери)
@@ -724,6 +724,16 @@ class Application(tk.Tk):
         x, y = event.x, event.y
         self.last_mouse_x = x
         self.last_mouse_y = y
+        
+        # Для режимов добавления проемов используем точные координаты клика без snapping
+        if self.mode in ["add_window", "add_door"]:
+            # Ищем стену под курсором
+            for wall in self.plan.walls:
+                if wall.contains_point(x, y, tolerance=10):
+                    self.add_opening_to_wall(wall, self.mode, x, y)
+                    return
+            return
+        
         snap = self.get_snap_point(x, y)
         if snap: x, y = snap.x, snap.y
         
@@ -763,13 +773,6 @@ class Application(tk.Tk):
             for w in self.plan.walls: w.selected = False
             self.update_properties_panel()
             self.renderer.render()
-        
-        elif self.mode in ["add_window", "add_door"]:
-            # Клик для добавления проема
-            for wall in self.plan.walls:
-                if wall.contains_point(x, y, tolerance=10):
-                    self.add_opening_to_wall(wall, self.mode)
-                    return
 
     def on_mouse_drag(self, event):
         x, y = event.x, event.y
@@ -913,24 +916,19 @@ class Application(tk.Tk):
             # Ищем стену под курсором
             for wall in self.plan.walls:
                 if wall.contains_point(x, y, tolerance=10):
-                    self.add_opening_to_wall(wall, self.mode)
+                    self.add_opening_to_wall(wall, self.mode, x, y)
                     return
 
-    def add_opening_to_wall(self, wall, opening_type):
-        """Добавляет окно или дверь в стену"""
-        # Вычисляем позицию клика относительно начала стены
+    def add_opening_to_wall(self, wall, opening_type, click_x, click_y):
+        """Добавляет окно или дверь в стену по координатам клика"""
         dx = wall.end.x - wall.start.x
         dy = wall.end.y - wall.start.y
         length = math.hypot(dx, dy)
         if length == 0:
             return
         
-        # Используем реальную позицию мыши из последнего события
-        mouse_x = self.last_mouse_x
-        mouse_y = self.last_mouse_y
-        
         # Проекция точки клика на линию стены
-        t = ((mouse_x - wall.start.x) * dx + (mouse_y - wall.start.y) * dy) / (length * length)
+        t = ((click_x - wall.start.x) * dx + (click_y - wall.start.y) * dy) / (length * length)
         t = max(0.1, min(0.9, t))  # Ограничиваем от 10% до 90% длины стены
         offset_px = t * length
         
