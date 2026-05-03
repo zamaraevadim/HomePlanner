@@ -925,12 +925,13 @@ class Application(tk.Tk):
         if length == 0:
             return
         
-        # Проекция точки клика на линию стены (используем последнее событие мыши)
-        # Для простоты берем середину стены если нет события
-        try:
-            t = max(0.15, min(0.85, ((self.last_mouse_x - wall.start.x) * dx + (self.last_mouse_y - wall.start.y) * dy) / (length * length)))
-        except:
-            t = 0.5
+        # Используем реальную позицию мыши из последнего события
+        mouse_x = self.last_mouse_x
+        mouse_y = self.last_mouse_y
+        
+        # Проекция точки клика на линию стены
+        t = ((mouse_x - wall.start.x) * dx + (mouse_y - wall.start.y) * dy) / (length * length)
+        t = max(0.1, min(0.9, t))  # Ограничиваем от 10% до 90% длины стены
         offset_px = t * length
         
         # Ширина проема в пикселях (примерно 1 метр)
