@@ -1,14 +1,17 @@
 #! /usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Простой планировщик зданий 2.0
+Простой планировщик зданий 3.0
 Функционал:
 - Свободное рисование стен любой длины и под любым углом
 - Привязка (snapping) к узлам сетки и концам других стен
 - Установка окон и дверей в стены
 - Сетка (вкл/выкл)
 - Экспорт в PDF с корректным отображением всех объектов
-- Слои и свойства объектов
+- Выделение стен и редактирование параметров (длина, толщина, материал, угол)
+- Изменение размера перетаскиванием за ручки (с включением/отключением)
+- Автоматическое объединение стен в углах
+- Отображение размеров всех стен
 """
 
 import tkinter as tk
@@ -33,6 +36,10 @@ MATERIAL_COLORS = {
     "Каркас": "#F5DEB3",
     "Перегородка": "#D3D3D3"
 }
+
+COLOR_WALL_SELECTED = "#0066FF"
+COLOR_DIMENSION = "#006400"
+COLOR_HANDLE = "#FF6600"
 
 class Point:
     """Класс для хранения точки (координаты в пикселях экрана)"""
@@ -61,6 +68,11 @@ class Wall:
         return px_len / SCALE_FACTOR
 
     @property
+    def length_px(self):
+        """Длина стены в пикселях"""
+        return self.start.distance_to(self.end)
+
+    @property
     def angle(self):
         """Угол стены в градусах"""
         return math.degrees(math.atan2(self.end.y - self.start.y, self.end.x - self.start.x))
@@ -71,7 +83,6 @@ class Wall:
 
     def contains_point(self, x, y, tolerance=5):
         """Проверяет, находится ли точка (x,y) близко к линии стены (для выделения)"""
-        # Расстояние от точки до отрезка
         p = Point(x, y)
         line_vec = Point(self.end.x - self.start.x, self.end.y - self.start.y)
         point_vec = Point(p.x - self.start.x, p.y - self.start.y)
@@ -90,6 +101,46 @@ class Wall:
 
     def get_endpoints(self):
         return [self.start, self.end]
+
+    def set_length(self, new_length_m, from_end=True):
+        """Изменяет длину стены, сохраняя угол и позицию одного из концов"""
+        current_length_px = self.length_px
+        if current_length_px == 0:
+            return
+        ratio = (new_length_m * SCALE_FACTOR) / current_length_px
+        dx = self.end.x - self.start.x
+        dy = self.end.y - self.start.y
+        
+        if from_end:
+            # Меняем конец end, start фиксирован
+            self.end.x = self.start.x + dx * ratio
+            self.end.y = self.start.y + dy * ratio
+        else:
+            # Меняем конец start, end фиксирован
+            self.start.x = self.end.x - dx * ratio
+            self.start.y = self.end.y - dy * ratio
+
+    def set_angle(self, new_angle_deg, from_end=True):
+        """Изменяет угол стены, сохраняя длину и позицию одного из концов"""
+        rad = math.radians(new_angle_deg)
+        length_px = self.length_px
+        
+        if from_end:
+            self.end.x = self.start.x + length_px * math.cos(rad)
+            self.end.y = self.start.y + length_px * math.sin(rad)
+        else:
+            self.start.x = self.end.x - length_px * math.cos(rad)
+            self.start.y = self.end.y - length_px * math.sin(rad)
+
+    def set_start_pos(self, x, y):
+        """Перемещает начало стены"""
+        self.start.x = x
+        self.start.y = y
+
+    def set_end_pos(self, x, y):
+        """Перемещает конец стены"""
+        self.end.x = x
+        self.end.y = y
 
 class Opening:
     """Класс для Окна или Двери (проем в стене)"""
@@ -235,28 +286,29 @@ class TkinterRenderer(Renderer):
                 outline_color = COLOR_WALL_SELECTED if wall.selected else "black"
                 self.canvas.create_polygon(coords, fill=color, outline=outline_color, width=2 if wall.selected else 1, tags="wall")
             
-            # Маркеры выделения (ручки для изменения размера)
+            # Размер стены рядом с ней (рисуем для всех стен) - увеличенное смещение для лучшей видимости
+            mid_x = (wall.start.x + wall.end.x) / 2
+            mid_y = (wall.start.y + wall.end.y) / 2
+            # Смещение перпендикулярно стене
+            dx = wall.end.x - wall.start.x
+            dy = wall.end.y - wall.start.y
+            length = math.hypot(dx, dy)
+            if length > 0:
+                nx, ny = -dy/length, dx/length
+                dim_x = mid_x + nx * 25  # Увеличено смещение
+                dim_y = mid_y + ny * 25
+                self.canvas.create_text(dim_x, dim_y, text=f"{wall.length_m:.2f}м", 
+                                       font=("Arial", 10, "bold"), fill=COLOR_DIMENSION, tags="dimension")
+            
+            # Маркеры выделения (ручки для изменения размера) - только если стена выделена
             if wall.selected:
-                # Ручки на концах стены
+                # Ручки на концах стены - рисуем всегда, но цвет зависит от режима
                 r = 6
+                handle_color = COLOR_HANDLE if self.resize_mode_enabled else "blue"
                 self.canvas.create_oval(wall.start.x-r, wall.start.y-r, wall.start.x+r, wall.start.y+r, 
-                                       fill="white", outline="blue", width=2, tags="resize_handle_start")
-                self.canvas.create_oval(wall.end.x-r, wall.end.y-r, wall.end.x+r, wall.end.y+r, 
-                                       fill="white", outline="blue", width=2, tags="resize_handle_end")
-                
-                # Размер стены рядом с ней
-                mid_x = (wall.start.x + wall.end.x) / 2
-                mid_y = (wall.start.y + wall.end.y) / 2
-                # Смещение перпендикулярно стене
-                dx = wall.end.x - wall.start.x
-                dy = wall.end.y - wall.start.y
-                length = math.hypot(dx, dy)
-                if length > 0:
-                    nx, ny = -dy/length, dx/length
-                    dim_x = mid_x + nx * 20
-                    dim_y = mid_y + ny * 20
-                    self.canvas.create_text(dim_x, dim_y, text=f"{wall.length_m:.2f}м", 
-                                           font=("Arial", 9, "bold"), fill=COLOR_DIMENSION, tags="dimension")
+                                       fill="white", outline=handle_color, width=2, tags="resize_handle_start")
+                self.canvas.create_oval(wall.end.x-r, wall.end.y-r, wall.end.x+r, wall.end.y+r,
+                                       fill="white", outline=handle_color, width=2, tags="resize_handle_end")
 
         # Отрисовка проемов (окна/двери)
         for op in self.plan.openings:
@@ -447,8 +499,8 @@ class PdfRenderer(Renderer):
 class Application(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Простой планировщик зданий 2.0")
-        self.geometry("1000x700")
+        self.title("Простой планировщик зданий 3.0")
+        self.geometry("1200x750")
         
         self.plan = BuildingPlan()
         self.renderer = None  # Будет создан после создания canvas
@@ -459,11 +511,17 @@ class Application(tk.Tk):
         self.dragged_object = None
         self.drag_offset = Point(0,0)
         self.hover_snap_point = None
+        self.resize_mode_enabled = False  # Режим изменения размера перетаскиванием ручек
+        self.active_resize_handle = None  # 'start' или 'end' - какая ручка активна
         
         self._init_ui()
         
+        # Для отслеживания позиции мыши при добавлении проемов
+        self.last_mouse_x = 0
+        self.last_mouse_y = 0
+        
     def _init_ui(self):
-        # Верхняя панель
+        # Верхняя панель инструментов
         toolbar = ttk.Frame(self)
         toolbar.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
         
@@ -484,7 +542,7 @@ class Application(tk.Tk):
         
         ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
         
-        # Свойства
+        # Настройки новых стен
         ttk.Label(toolbar, text="Материал:").pack(side=tk.LEFT, padx=5)
         self.combo_material = ttk.Combobox(toolbar, values=list(MATERIAL_COLORS.keys()), state="readonly", width=10)
         self.combo_material.current(1) # Дерево
@@ -497,6 +555,14 @@ class Application(tk.Tk):
         
         ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
         
+        # Чекбокс режима изменения размера
+        self.resize_var = tk.BooleanVar(value=False)
+        self.chk_resize = ttk.Checkbutton(toolbar, text="✏️ Изменение размера ручками", 
+                                          variable=self.resize_var, command=self.toggle_resize_mode)
+        self.chk_resize.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
+        
         # Действия
         self.btn_grid = ttk.Button(toolbar, text="Сетка: ВКЛ", command=self.toggle_grid)
         self.btn_grid.pack(side=tk.LEFT, padx=5)
@@ -505,11 +571,54 @@ class Application(tk.Tk):
         ttk.Button(toolbar, text="📄 Сохранить PDF", command=self.export_pdf).pack(side=tk.LEFT, padx=5)
         ttk.Button(toolbar, text="❌ Очистить все", command=self.clear_all).pack(side=tk.RIGHT, padx=5)
         
+        # Основная рабочая область
+        main_frame = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
         # Холст
-        self.canvas = tk.Canvas(self, bg="white", width=800, height=500)
-        self.canvas.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        canvas_frame = ttk.Frame(main_frame)
+        main_frame.add(canvas_frame, weight=3)
+        
+        self.canvas = tk.Canvas(canvas_frame, bg="white", width=800, height=500)
+        self.canvas.pack(fill=tk.BOTH, expand=True)
         
         self.renderer = TkinterRenderer(self.canvas, self.plan)
+        
+        # Правая панель - свойства выделенной стены
+        props_frame = ttk.LabelFrame(main_frame, text="Свойства выделенной стены", padding=10)
+        main_frame.add(props_frame, weight=1)
+        
+        # Поля редактирования свойств
+        ttk.Label(props_frame, text="Длина (м):").grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.prop_length = ttk.Entry(props_frame, width=10)
+        self.prop_length.grid(row=0, column=1, pady=5, padx=5)
+        self.prop_length.bind("<Return>", lambda e: self.apply_wall_properties())
+        
+        ttk.Label(props_frame, text="Толщина (м):").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.prop_thickness = ttk.Entry(props_frame, width=10)
+        self.prop_thickness.grid(row=1, column=1, pady=5, padx=5)
+        self.prop_thickness.bind("<Return>", lambda e: self.apply_wall_properties())
+        
+        ttk.Label(props_frame, text="Угол (°):").grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.prop_angle = ttk.Entry(props_frame, width=10)
+        self.prop_angle.grid(row=2, column=1, pady=5, padx=5)
+        self.prop_angle.bind("<Return>", lambda e: self.apply_wall_properties())
+        
+        ttk.Label(props_frame, text="Материал:").grid(row=3, column=0, sticky=tk.W, pady=5)
+        self.prop_material = ttk.Combobox(props_frame, values=list(MATERIAL_COLORS.keys()), state="readonly", width=10)
+        self.prop_material.grid(row=3, column=1, pady=5, padx=5)
+        self.prop_material.bind("<<ComboboxSelected>>", lambda e: self.apply_wall_properties())
+        
+        # Кнопки применения
+        btn_apply = ttk.Button(props_frame, text="Применить", command=self.apply_wall_properties)
+        btn_apply.grid(row=4, column=0, columnspan=2, pady=10, sticky=tk.EW)
+        
+        btn_close = ttk.Button(props_frame, text="Снять выделение", command=self.deselect_all)
+        btn_close.grid(row=5, column=0, columnspan=2, pady=5, sticky=tk.EW)
+        
+        # Информация о выделенном объекте
+        self.info_label = ttk.Label(props_frame, text="Нет выделенных объектов", wraplength=200)
+        self.info_label.grid(row=6, column=0, columnspan=2, pady=10)
         
         # Привязка событий
         self.canvas.bind("<ButtonPress-1>", self.on_mouse_down)
@@ -517,6 +626,7 @@ class Application(tk.Tk):
         self.canvas.bind("<ButtonRelease-1>", self.on_mouse_up)
         self.canvas.bind("<Motion>", self.on_mouse_move)
         self.canvas.bind("<Delete>", lambda e: self.delete_selected())
+        self.canvas.bind("<Double-Button-1>", self.on_double_click)
         
         # Статус бар
         self.status_var = tk.StringVar()
@@ -533,12 +643,18 @@ class Application(tk.Tk):
         self.renderer.remove_temp()
         self.status_var.set(f"Режим: {mode}")
         
-        # Визуальное выделение кнопок (упрощенно сброс цветов)
-        # В реальном приложении можно менять relief или color
+        # Обновляем состояние кнопок
+        for btn in [self.btn_draw, self.btn_select, self.btn_win, self.btn_door]:
+            btn.state(['!pressed'])
 
     def toggle_grid(self):
         self.plan.show_grid = not self.plan.show_grid
         self.btn_grid.config(text=f"Сетка: {'ВКЛ' if self.plan.show_grid else 'ВЫКЛ'}")
+        self.renderer.render()
+
+    def toggle_resize_mode(self):
+        self.resize_mode_enabled = self.resize_var.get()
+        self.status_var.set(f"Режим изменения размера ручками: {'ВКЛ' if self.resize_mode_enabled else 'ВЫКЛ'}")
         self.renderer.render()
 
     def get_snap_point(self, x, y):
@@ -562,14 +678,30 @@ class Application(tk.Tk):
                 
         return best_point
 
+    def check_resize_handle_click(self, x, y):
+        """Проверяет клик по ручке изменения размера выделенной стены"""
+        if not self.resize_mode_enabled:
+            return None
+        for wall in self.plan.walls:
+            if wall.selected:
+                r = 8
+                if math.hypot(wall.start.x - x, wall.start.y - y) < r:
+                    return (wall, 'start')
+                if math.hypot(wall.end.x - x, wall.end.y - y) < r:
+                    return (wall, 'end')
+        return None
+
     def on_mouse_move(self, event):
         x, y = event.x, event.y
+        self.last_mouse_x = x
+        self.last_mouse_y = y
+        
         snap = self.get_snap_point(x, y)
         
-        if snap:
+        if snap and self.mode == "draw_wall":
             self.hover_snap_point = snap
             self.renderer.draw_snap_indicator(snap.x, snap.y)
-            x, y = snap.x, snap.y # Курсор прыгает к точке
+            x, y = snap.x, snap.y
         else:
             self.hover_snap_point = None
             self.canvas.delete("snap")
@@ -581,11 +713,27 @@ class Application(tk.Tk):
             ang = math.degrees(math.atan2(y - self.current_wall_start.y, x - self.current_wall_start.x))
             self.status_var.set(f"Длина: {m:.2f} м | Угол: {ang:.1f}°")
         elif self.mode == "select":
-            # Подсветка стен под курсором
-            pass
+            # Проверка наведения на ручку
+            handle_info = self.check_resize_handle_click(x, y)
+            if handle_info and self.resize_mode_enabled:
+                self.canvas.config(cursor="sb_h_double_arrow")
+            else:
+                self.canvas.config(cursor="")
 
     def on_mouse_down(self, event):
         x, y = event.x, event.y
+        self.last_mouse_x = x
+        self.last_mouse_y = y
+        
+        # Для режимов добавления проемов используем точные координаты клика без snapping
+        if self.mode in ["add_window", "add_door"]:
+            # Ищем стену под курсором
+            for wall in self.plan.walls:
+                if wall.contains_point(x, y, tolerance=10):
+                    self.add_opening_to_wall(wall, self.mode, x, y)
+                    return
+            return
+        
         snap = self.get_snap_point(x, y)
         if snap: x, y = snap.x, snap.y
         
@@ -596,23 +744,34 @@ class Application(tk.Tk):
             else:
                 # Завершение стены
                 self.finish_wall(x, y)
-                
+        
         elif self.mode == "select":
+            # Сначала проверяем клик по ручке изменения размера
+            if self.resize_mode_enabled:
+                handle_info = self.check_resize_handle_click(x, y)
+                if handle_info:
+                    wall, handle = handle_info
+                    self.active_resize_handle = handle
+                    self.dragged_object = wall
+                    self.status_var.set(f"Изменение размера стены за {handle}")
+                    return
+            
             # Поиск объекта для перетаскивания
-            # Сначала проверяем стены
-            for wall in reversed(self.plan.walls): # Сверху вниз
+            for wall in reversed(self.plan.walls):
                 if wall.contains_point(x, y):
                     self.dragged_object = wall
-                    self.drag_offset = Point(x - wall.start.x, y - wall.start.y) # Запоминаем смещение относительно начала
+                    self.drag_offset = Point(x - wall.start.x, y - wall.start.y)
                     wall.selected = True
                     # Снимаем выделение с остальных
                     for w in self.plan.walls:
                         if w != wall: w.selected = False
+                    self.update_properties_panel()
                     self.renderer.render()
                     return
             
             # Если не попали в стену, снимаем выделение
             for w in self.plan.walls: w.selected = False
+            self.update_properties_panel()
             self.renderer.render()
 
     def on_mouse_drag(self, event):
@@ -624,20 +783,31 @@ class Application(tk.Tk):
             self.renderer.draw_temp_line(self.current_wall_start.x, self.current_wall_start.y, x, y)
             
         elif self.mode == "select" and self.dragged_object:
-            # Перемещение стены
             wall = self.dragged_object
-            dx = x - self.drag_offset.x - wall.start.x
-            dy = y - self.drag_offset.y - wall.start.y
             
-            wall.start.x += dx
-            wall.start.y += dy
-            wall.end.x += dx
-            wall.end.y += dy
+            if self.resize_mode_enabled and self.active_resize_handle:
+                # Изменение размера перетаскиванием ручки
+                if self.active_resize_handle == 'start':
+                    wall.set_start_pos(x, y)
+                elif self.active_resize_handle == 'end':
+                    wall.set_end_pos(x, y)
+            else:
+                # Перемещение всей стены
+                dx = x - self.drag_offset.x - wall.start.x
+                dy = y - self.drag_offset.y - wall.start.y
+                
+                wall.start.x += dx
+                wall.start.y += dy
+                wall.end.x += dx
+                wall.end.y += dy
+            
+            self.update_properties_panel()
             self.renderer.render()
 
     def on_mouse_up(self, event):
         if self.mode == "select":
             self.dragged_object = None
+            self.active_resize_handle = None
             
     def finish_wall(self, x, y):
         try:
@@ -665,6 +835,132 @@ class Application(tk.Tk):
         self.renderer.render()
         self.status_var.set(f"Стена добавлена. Длина: {wall.length_m:.2f} м")
 
+    def update_properties_panel(self):
+        """Обновляет панель свойств на основе выделенной стены"""
+        selected_walls = [w for w in self.plan.walls if w.selected]
+        
+        if len(selected_walls) == 1:
+            wall = selected_walls[0]
+            self.prop_length.delete(0, tk.END)
+            self.prop_length.insert(0, f"{wall.length_m:.2f}")
+            
+            self.prop_thickness.delete(0, tk.END)
+            self.prop_thickness.insert(0, f"{wall.thickness:.2f}")
+            
+            self.prop_angle.delete(0, tk.END)
+            self.prop_angle.insert(0, f"{wall.angle:.1f}")
+            
+            self.prop_material.set(wall.material)
+            
+            self.info_label.config(text=f"Стена выбрана\nДлина: {wall.length_m:.2f}м\nУгол: {wall.angle:.1f}°")
+        elif len(selected_walls) > 1:
+            self.info_label.config(text=f"Выбрано стен: {len(selected_walls)}")
+            self.prop_length.delete(0, tk.END)
+            self.prop_thickness.delete(0, tk.END)
+            self.prop_angle.delete(0, tk.END)
+        else:
+            self.info_label.config(text="Нет выделенных объектов")
+            self.prop_length.delete(0, tk.END)
+            self.prop_thickness.delete(0, tk.END)
+            self.prop_angle.delete(0, tk.END)
+
+    def apply_wall_properties(self):
+        """Применяет изменения из панели свойств к выделенной стене"""
+        selected_walls = [w for w in self.plan.walls if w.selected]
+        
+        if len(selected_walls) != 1:
+            messagebox.showwarning("Внимание", "Выделите ровно одну стену для редактирования")
+            return
+        
+        wall = selected_walls[0]
+        
+        try:
+            new_length = float(self.prop_length.get())
+            if new_length > 0:
+                wall.set_length(new_length, from_end=True)
+        except ValueError:
+            pass
+        
+        try:
+            new_thick = float(self.prop_thickness.get())
+            if new_thick > 0:
+                wall.thickness = new_thick
+        except ValueError:
+            pass
+        
+        try:
+            new_angle = float(self.prop_angle.get())
+            wall.set_angle(new_angle, from_end=True)
+        except ValueError:
+            pass
+        
+        new_material = self.prop_material.get()
+        if new_material in MATERIAL_COLORS:
+            wall.material = new_material
+        
+        self.renderer.render()
+        self.status_var.set("Свойства стены обновлены")
+
+    def deselect_all(self):
+        """Снимает выделение со всех стен"""
+        for w in self.plan.walls:
+            w.selected = False
+        self.update_properties_panel()
+        self.renderer.render()
+
+    def on_double_click(self, event):
+        """Двойной клик - быстрое добавление окна/двери или выделение"""
+        x, y = event.x, event.y
+        
+        if self.mode in ["add_window", "add_door"]:
+            # Ищем стену под курсором
+            for wall in self.plan.walls:
+                if wall.contains_point(x, y, tolerance=10):
+                    self.add_opening_to_wall(wall, self.mode, x, y)
+                    return
+
+    def add_opening_to_wall(self, wall, opening_type, click_x, click_y):
+        """Добавляет окно или дверь в стену по координатам клика"""
+        dx = wall.end.x - wall.start.x
+        dy = wall.end.y - wall.start.y
+        length = math.hypot(dx, dy)
+        if length == 0:
+            return
+        
+        # Проекция точки клика на линию стены
+        t = ((click_x - wall.start.x) * dx + (click_y - wall.start.y) * dy) / (length * length)
+        t = max(0.1, min(0.9, t))  # Ограничиваем от 10% до 90% длины стены
+        offset_px = t * length
+        
+        # Ширина проема в пикселях (примерно 1 метр)
+        width_px = 1.0 * SCALE_FACTOR
+        
+        # Проверка - не выходит ли проем за границы стены
+        if offset_px < width_px/2 or offset_px > length - width_px/2:
+            messagebox.showwarning("Внимание", "Недостаточно места для проема на этом участке стены")
+            return
+        
+        opening = Opening(wall, offset_px, width_px, opening_type)
+        self.plan.add_opening(opening)
+        self.renderer.render()
+        self.status_var.set(f"{'Окно' if opening_type == 'window' else 'Дверь'} добавлено")
+
+    def set_mode(self, mode):
+        self.mode = mode
+        self.current_wall_start = None
+        self.renderer.remove_temp()
+        self.status_var.set(f"Режим: {mode}")
+        
+        # Обновляем состояние кнопок
+        for btn in [self.btn_draw, self.btn_select, self.btn_win, self.btn_door]:
+            btn.state(['!pressed'])
+        
+        # Если режим добавления проема - подсказываем пользователю
+        if mode == "add_window":
+            self.status_var.set("Кликните на стену для добавления окна")
+        elif mode == "add_door":
+            self.status_var.set("Кликните на стену для добавления двери")
+
     def delete_selected(self):
         count = 0
         # Удаляем стены
@@ -674,6 +970,7 @@ class Application(tk.Tk):
                 count += 1
         if count > 0:
             self.renderer.render()
+            self.update_properties_panel()
             self.status_var.set(f"Удалено объектов: {count}")
         else:
             self.status_var.set("Ничего не выделено для удаления")
