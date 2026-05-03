@@ -560,7 +560,7 @@ class Application(tk.Tk):
             dist = math.hypot(x - self.current_wall_start.x, y - self.current_wall_start.y)
             m = dist / self.plan.scale
             ang = math.degrees(math.atan2(y - self.current_wall_start.y, x - self.current_wall_start.x))
-            self.status_var.set(fДлина: {m:.2f} м | Угол: {ang:.1f}°")
+            self.status_var.set(f"Длина: {m:.2f} м | Угол: {ang:.1f}°")
         elif self.mode == "select":
             # Подсветка стен под курсором
             pass
