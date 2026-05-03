@@ -1,0 +1,38 @@
+```python
+# Compiled Python files
+*.pyc
+__pycache__/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.swp
+
+# Environment files
+.env
+.env.local
+*.env.*
+
+# Coverage reports
+.coverage
+coverage/
+htmlcov/
+
+# IDE specific
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+```
