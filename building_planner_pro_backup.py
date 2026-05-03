@@ -52,7 +52,6 @@ class Wall:
         self.material = material
         self.selected = False
         self.id = None  # ID объекта на канвасе
-        self.resize_handle = None  # Какой угол растягиваем: 'start' или 'end'
 
     @property
     def length_m(self):
@@ -82,11 +81,6 @@ class Wall:
         t = max(0, min(1, (point_vec.x * line_vec.x + point_vec.y * line_vec.y) / line_len_sq))
         projection = Point(self.start.x + t * line_vec.x, self.start.y + t * line_vec.y)
         return p.distance_to(projection) < tolerance
-
-    def is_near_endpoint(self, x, y, endpoint='start', tolerance=8):
-        """Проверяет, находится ли точка рядом с указанным концом стены"""
-        pt = self.start if endpoint == 'start' else self.end
-        return math.hypot(pt.x - x, pt.y - y) < tolerance
 
     def get_endpoints(self):
         return [self.start, self.end]
@@ -225,38 +219,21 @@ class TkinterRenderer(Renderer):
         
         self.draw_grid(width, height)
         
-        # Отрисовка стен с размерами
+        # Отрисовка стен
         for wall in self.plan.walls:
             color = MATERIAL_COLORS.get(wall.material, "#000000")
             coords = self.draw_wall_path(self.canvas, wall, self.plan.scale)
             
             # Заливка
             if len(coords) == 8:
-                outline_color = COLOR_WALL_SELECTED if wall.selected else "black"
-                self.canvas.create_polygon(coords, fill=color, outline=outline_color, width=2 if wall.selected else 1, tags="wall")
+                self.canvas.create_polygon(coords, fill=color, outline="black", width=1, tags="wall")
+                # Внутренняя линия для красоты (опционально)
+                # self.canvas.create_line(wall.start.x, wall.start.y, wall.end.x, wall.end.y, fill="black", width=1, dash=(2,2))
             
-            # Маркеры выделения (ручки для изменения размера)
+            # Маркеры выделения
             if wall.selected:
-                # Ручки на концах стены
-                r = 6
-                self.canvas.create_oval(wall.start.x-r, wall.start.y-r, wall.start.x+r, wall.start.y+r, 
-                                       fill="white", outline="blue", width=2, tags="resize_handle_start")
-                self.canvas.create_oval(wall.end.x-r, wall.end.y-r, wall.end.x+r, wall.end.y+r, 
-                                       fill="white", outline="blue", width=2, tags="resize_handle_end")
-                
-                # Размер стены рядом с ней
-                mid_x = (wall.start.x + wall.end.x) / 2
-                mid_y = (wall.start.y + wall.end.y) / 2
-                # Смещение перпендикулярно стене
-                dx = wall.end.x - wall.start.x
-                dy = wall.end.y - wall.start.y
-                length = math.hypot(dx, dy)
-                if length > 0:
-                    nx, ny = -dy/length, dx/length
-                    dim_x = mid_x + nx * 20
-                    dim_y = mid_y + ny * 20
-                    self.canvas.create_text(dim_x, dim_y, text=f"{wall.length_m:.2f}м", 
-                                           font=("Arial", 9, "bold"), fill=COLOR_DIMENSION, tags="dimension")
+                self.canvas.create_oval(wall.start.x-3, wall.start.y-3, wall.start.x+3, wall.start.y+3, fill="blue", tags="select")
+                self.canvas.create_oval(wall.end.x-3, wall.end.y-3, wall.end.x+3, wall.end.y+3, fill="blue", tags="select")
 
         # Отрисовка проемов (окна/двери)
         for op in self.plan.openings:
@@ -264,6 +241,10 @@ class TkinterRenderer(Renderer):
             if pos:
                 cx, cy, angle = pos
                 w_px = op.width
+                # Рисуем прямоугольник проема
+                # Упрощенно: просто белый прямоугольник поверх стены
+                # Для правильного поворота нужно использовать полигон или матрицу трансформации
+                # Здесь сделаем упрощенно: если стена горизонтальная/вертикальная - ровно, иначе поворот
                 
                 # Вектор вдоль стены
                 dx = op.wall.end.x - op.wall.start.x
@@ -289,7 +270,7 @@ class TkinterRenderer(Renderer):
                     p1x - nx*thick/2, p1y - ny*thick/2
                 ]
                 
-                fill_color = "white" if op.type == "window" else "#DDA0DD"
+                fill_color = "white" if op.type == "window" else "#DDA0DD" # Двери чуть цветные
                 self.canvas.create_polygon(poly, fill=fill_color, outline="black", width=1, tags="opening")
                 
                 # Подпись типа
