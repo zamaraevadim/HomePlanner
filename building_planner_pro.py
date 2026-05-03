@@ -21,6 +21,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas as pdfcanvas
 from reportlab.lib import colors
 from reportlab.lib.units import cm
+import cairosvg
+import tempfile
 
 # --- КОНСТАНТЫ ---
 GRID_SIZE = 50  # Размер клетки сетки в пикселях (экран)
@@ -368,6 +370,67 @@ class TkinterRenderer(Renderer):
         r = 6
         self.canvas.create_oval(x-r, y-r, x+r, y+r, outline="green", width=2, tags="snap")
 
+    def export_svg(self, filename, plan):
+        """Экспорт плана в SVG формат"""
+        width = 800
+        height = 600
+        
+        svg_content = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">']
+        svg_content.append('  <rect width="100%" height="100%" fill="white"/>')
+        
+        # Рисуем стены
+        for wall in plan.walls:
+            color_hex = MATERIAL_COLORS.get(wall.material, "#000000")
+            coords = self.draw_wall_path(None, wall, plan.scale)
+            
+            if len(coords) == 8:
+                points = " ".join(f"{coords[i]},{coords[i+1]}" for i in range(0, 8, 2))
+                svg_content.append(f'  <polygon points="{points}" fill="{color_hex}" stroke="black" stroke-width="2"/>')
+            
+            # Размеры
+            mid_x = (wall.start.x + wall.end.x) / 2
+            mid_y = (wall.start.y + wall.end.y) / 2
+            dx = wall.end.x - wall.start.x
+            dy = wall.end.y - wall.start.y
+            length = math.hypot(dx, dy)
+            if length > 0:
+                nx, ny = -dy/length, dx/length
+                dim_x = mid_x + nx * 25
+                dim_y = mid_y + ny * 25
+                svg_content.append(f'  <text x="{dim_x}" y="{dim_y}" font-family="Arial" font-size="10" fill="green" text-anchor="middle">{wall.length_m:.2f}м</text>')
+        
+        # Рисуем проемы
+        for op in plan.openings:
+            pos = op.get_screen_coords()
+            if pos:
+                cx, cy, angle = pos
+                w_px = op.width
+                dx = op.wall.end.x - op.wall.start.x
+                dy = op.wall.end.y - op.wall.start.y
+                length = math.hypot(dx, dy)
+                if length == 0: continue
+                ux, uy = dx/length, dy/length
+                
+                p1x = cx - ux * (w_px/2)
+                p1y = cy - uy * (w_px/2)
+                p2x = cx + ux * (w_px/2)
+                p2y = cy + uy * (w_px/2)
+                
+                thick = op.wall.get_screen_thickness()
+                nx, ny = -uy, ux
+                
+                poly_points = f"{p1x + nx*thick/2},{p1y + ny*thick/2} {p2x + nx*thick/2},{p2y + ny*thick/2} {p2x - nx*thick/2},{p2y - ny*thick/2} {p1x - nx*thick/2},{p1y - ny*thick/2}"
+                fill_color = "white" if op.type == "window" else "#DDA0DD"
+                svg_content.append(f'  <polygon points="{poly_points}" fill="{fill_color}" stroke="black" stroke-width="1"/>')
+                
+                label = "Д" if op.type == "door" else "О"
+                svg_content.append(f'  <text x="{cx}" y="{cy}" font-family="Arial" font-size="8" fill="red" text-anchor="middle">{label}</text>')
+        
+        svg_content.append('</svg>')
+        
+        with open(filename, 'w') as f:
+            f.write('\n'.join(svg_content))
+
 class PdfRenderer(Renderer):
     """Отрисовка в PDF"""
     
@@ -569,6 +632,7 @@ class Application(tk.Tk):
         
         ttk.Button(toolbar, text="🗑 Удалить выделенное", command=self.delete_selected).pack(side=tk.LEFT, padx=5)
         ttk.Button(toolbar, text="📄 Сохранить PDF", command=self.export_pdf).pack(side=tk.LEFT, padx=5)
+        ttk.Button(toolbar, text="🖼 Сохранить PNG", command=self.export_png).pack(side=tk.LEFT, padx=5)
         ttk.Button(toolbar, text="❌ Очистить все", command=self.clear_all).pack(side=tk.RIGHT, padx=5)
         
         # Основная рабочая область
@@ -990,6 +1054,43 @@ class Application(tk.Tk):
                 messagebox.showinfo("Успех", f"Файл сохранен: {file_path}")
             except Exception as e:
                 messagebox.showerror("Ошибка PDF", str(e))
+
+    def export_png(self):
+        file_path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG files", "*.png")])
+        if file_path:
+            try:
+                # Создаем временный SVG файл
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.svg', delete=False) as tmp_svg:
+                    svg_path = tmp_svg.name
+                    # Генерируем SVG (упрощенно, можно доработать полноценный SVG экспортер)
+                    self.renderer.export_svg(svg_path, self.plan)
+                
+                # Конвертируем SVG в PNG
+                cairosvg.svg2png(url=svg_path, write_to=file_path)
+                
+                # Удаляем временный файл
+                os.unlink(svg_path)
+                
+                messagebox.showinfo("Успех", f"PNG сохранен: {file_path}")
+            except Exception as e:
+                messagebox.showerror("Ошибка PNG", str(e))
+                # Если cairosvg не установлен, пробуем простой скриншот
+                if "cairosvg" in str(e):
+                    self.screenshot_simple(file_path)
+
+    def screenshot_simple(self, file_path):
+        """Простой скриншот холста через PIL"""
+        try:
+            from PIL import ImageGrab
+            x = self.canvas.winfo_rootx()
+            y = self.canvas.winfo_rooty()
+            width = self.canvas.winfo_width()
+            height = self.canvas.winfo_height()
+            img = ImageGrab.grab(bbox=(x, y, x+width, y+height))
+            img.save(file_path)
+            messagebox.showinfo("Успех", f"Скриншот сохранен: {file_path}")
+        except Exception as e:
+            messagebox.showerror("Ошибка скриншота", str(e))
 
 if __name__ == "__main__":
     app = Application()
